@@ -4,6 +4,7 @@ import re
 import os
 import subprocess
 import sys
+import glob
 
 type_memory = { 'd', 'D', 'b', 'B' }
 type_flash = { 'd', 'D', 't', 'T', 'r', 'R'}
@@ -12,7 +13,7 @@ type_function = {'t', 'T'}
 
 ignored = { "irq_arch_disable", "irq_arch_restore"}
 NM = "arm-none-eabi-nm"
-_rtl_expand_suffix = "c.213r.expand"
+_rtl_expand_suffix = ".213r.expand"
 
 re_newfile = re.compile(r'^(.*):$')
 
@@ -138,24 +139,22 @@ class Symbol(object):
         else:
             return res + _max, _depth, _unknown
 
-def parse_syms(archive_files):
+def parse_syms(object_files):
     archives = []
     archive = None
+    archive = Archive("zephyr")
+    archives.append(archive)
     obj = None
+    object_files_str = " ".join(object_files)
 
-    for line in subprocess.check_output("%s -S -t d -p --synthetic %s | grep -v '^00000000 n wm4'" % (NM, archive_files), shell=True).decode().split('\n'):
+    for line in subprocess.check_output("%s -S -t d -p --synthetic %s | grep -v '^00000000 n wm4'" % (NM, object_files_str), shell=True).decode().split('\n'):
         if len(line) == 0:
             continue
 
         m = re_newfile.match(line)
         if m:
             fname = m.group(1)
-            if fname.endswith(".a"):
-                archive = Archive(fname)
-                archives.append(archive)
-                obj = None
-            else:
-                obj = Obj(fname, archive)
+            obj = Obj(fname, archive)
 
             continue
 
@@ -232,9 +231,9 @@ def parse_rtl(fname, obj):
 def parse_rtl_files():
     dprint("Parsing rtl files...")
     for archive in Archive._map:
-        archive_dir = archive.name[:-2]
         for name, obj in archive.objects.items():
-            rtl_file = os.path.join(archive_dir, name[:-1] + _rtl_expand_suffix)
+            n,o = os.path.splitext(name)
+            rtl_file = os.path.join(n + _rtl_expand_suffix)
             if os.path.isfile(rtl_file):
                 parse_rtl(rtl_file, obj)
             else:
@@ -262,7 +261,8 @@ def parse_stackusage_files():
     for archive in Archive._map:
         archive_dir = archive.name[:-2]
         for name, obj in archive.objects.items():
-            su_file = os.path.join(archive_dir, name[:-1] + "su")
+            n,o = os.path.splitext(name)
+            su_file = os.path.join(n + ".su")
             if os.path.isfile(su_file):
                 parse_stack_usage(su_file, obj)
             else:
@@ -359,15 +359,18 @@ def total_sizes():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("bindir", help="set bindir")
+    parser.add_argument("--object-extension", help="extension of object files", default="obj")
+    parser.add_argument("--root", help="root for object files", default=".")
+    parser.add_argument("--elf", help="elf file")
     parser.add_argument("--nm", "-n", help="set name of nm tool")
     args=parser.parse_args()
 
     if args.nm:
         NM=args.nm
 
-    parse_syms(args.bindir + "/*.a")
-    parse_elfsyms(args.bindir + "/*.elf")
+    objects = glob.glob('{}/**/*.{}'.format(args.root, args.object_extension), recursive=True)
+    parse_syms(objects)
+    parse_elfsyms(args.elf)
     parse_rtl_files()
     parse_stackusage_files()
 
