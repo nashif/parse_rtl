@@ -13,7 +13,7 @@ type_function = {'t', 'T'}
 
 ignored = { "irq_arch_disable", "irq_arch_restore"}
 NM = "arm-none-eabi-nm"
-_rtl_expand_suffix = ".213r.expand"
+_rtl_expand_suffix = ".234r.expand"
 
 re_newfile = re.compile(r'^(.*):$')
 
@@ -27,7 +27,7 @@ re_symdep = re.compile(r'^         U (\w+)$')
 re_rtl_func = re.compile(r'^;; Function (\w+) \(.*$')
 
 # ... "(call (mem:SI (symbol_ref:SI ("mutex_unlock")"
-re_rtl_func_call = re.compile(r'^.*\(call \(mem:SI \(symbol_ref:SI \(\"(\w+)\"\).*$')
+re_rtl_func_call = re.compile(r'^.*\(call \(mem:QI \(symbol_ref:SI \(\"(\w+)\"\).*$')
 
 # ..."(mem/f/c:SI (reg/f:SI 120) [1 main_name+0 S4 A32]))"
 re_rtl_symbol_ref = re.compile(r'^.*\(mem.+:.I \(reg/f:SI \d+\) \[\d+ (\w+)\+0 S\d+ A\d+\]\)\).*$')
@@ -85,14 +85,17 @@ class Symbol(object):
         Symbol._map[s._global_name] = s
 
     def is_used(s):
-        if s._type == 'W':
-            return False
-        if s.used:
-            return True
-
-        for used_by in s.used_by:
-            if used_by.is_used():
+        try:
+            if s._type == 'W':
+                return False
+            if s.used:
                 return True
+
+            for used_by in s.used_by:
+                if used_by.is_used():
+                    return True
+        except RecursionError:
+            return False
 
         return False
 
@@ -115,7 +118,7 @@ class Symbol(object):
         return res
 
     def get_stack_usage(s, depth=0):
-        print(s.name)
+        #print(s.name)
         if s.stack_usage == -1:
             res = 0
             _unknown = 1
@@ -125,15 +128,20 @@ class Symbol(object):
 
         _max = 0
         _depth = depth
+        """
+        print("depth: {} deps: {} stack usage: {}".format(depth, s.deps, s.stack_usage))
         for dep in s.deps:
+            print("dep: {}".format(dep))
             if not dep._type in type_function:
                 continue
+
             _bytes, ndepth, unknown = dep.get_stack_usage(depth+1)
+
             if _bytes > _max or (_bytes == _max and ndepth > _depth):
                 _max = _bytes
                 _depth = ndepth
             _unknown = _unknown | unknown
-
+        """
         if depth == 0:
             return res + _max + (_depth * 0), _depth, _unknown
         else:
@@ -200,7 +208,6 @@ def parse_elfsyms(fname):
 
 def parse_rtl(fname, obj):
     function = None
-    dprint("parsing", fname)
     for line in open(fname, "r"):
         if len(line) == 1:
             continue
@@ -209,6 +216,7 @@ def parse_rtl(fname, obj):
         m = re_rtl_func.match(line)
         if m:
             name = m.group(1)
+            dprint("function match: %s" %name)
             function = Symbol._map[Symbol.get_global_name(name, obj)]
             continue
 
@@ -218,6 +226,7 @@ def parse_rtl(fname, obj):
         m = re_rtl_func_call.match(line) or re_rtl_symbol_ref.match(line)
         if m:
             ref = m.group(1)
+            dprint("ref match: %s" %name)
             ref_sym = Symbol._map.get(Symbol.get_global_name(ref, obj))
             if not ref_sym:
                 ref_sym = Symbol.unmangled_map.get(ref)
@@ -235,13 +244,14 @@ def parse_rtl_files():
             n,o = os.path.splitext(name)
             rtl_file = os.path.join(n + _rtl_expand_suffix)
             if os.path.isfile(rtl_file):
+                dprint("Parsing ", rtl_file)
                 parse_rtl(rtl_file, obj)
             else:
                 dprint("Warning: no file", rtl_file)
 
 def parse_stack_usage(fname, obj):
     function = None
-    dprint("parsing", fname)
+    #dprint("parsing", fname)
     for line in open(fname, "r"):
         if len(line) == 1:
             continue
@@ -249,7 +259,7 @@ def parse_stack_usage(fname, obj):
 
         tmp, nbytes, static = line.split("\t")
         source, line, pos, func = tmp.split(":")
-        dprint(obj.name, source, func, nbytes)
+        #dprint(obj.name, source, func, nbytes)
         sym = Symbol.get(func, obj)
         if not sym:
             continue
@@ -268,18 +278,21 @@ def parse_stackusage_files():
             else:
                 dprint("Warning: no file", su_file)
 
-def generate_archive_clusters():
+def generate_archive_clusters(outfile):
     for archive in Archive._map:
         if not archive.is_used():
             continue
 
-        print (" subgraph \"cluster_%s\" {" % os.path.basename(archive.name))
-        print(" color=black")
-        print(" label=\"%s\"" % os.path.basename(archive.name))
+        outfile.write(" subgraph \"cluster_%s\" {\n" % os.path.basename(archive.name))
+        outfile.write(" color=black\n")
+        outfile.write(" label=\"%s\"\n" % os.path.basename(archive.name))
         for oname, obj in archive.objects.items():
-            print (" subgraph \"cluster_%s\" {" % oname)
-            print(" color=grey")
-            print(" label=\"%s\"" % oname)
+            outfile.write(" subgraph \"cluster_%s\" {\n" % oname)
+            outfile.write(" color=grey\n")
+            on = re.sub("outdir/qemu_x86/zephyr/", "", oname)
+            on = re.sub("CMakeFiles/.*\.dir/", "", on)
+            on = re.sub(".obj$", "", on)
+            outfile.write(" label=\"%s\"\n" % on)
 
             for sname, symbol in obj.symbols.items():
                 if symbol.is_used():
@@ -293,13 +306,13 @@ def generate_archive_clusters():
                         _attrs = []
                         for name, value in attrs.items():
                             _attrs.append("%s=\"%s\"" % (name, value))
-                        print ("\"%s\" [%s];" % (symbol.name, ",".join(_attrs)))
-            print("}")
-        print("}")
+                        outfile.write("\"%s\" [%s];\n" % (symbol.name, ",".join(_attrs)))
+            outfile.write("}\n")
+        outfile.write("}\n")
 
-def generate_callgraph():
-    print("digraph G {")
-    print("overlap = false;")
+def generate_callgraph(outfile):
+    outfile.write("digraph G {\n")
+    outfile.write("overlap = false;\n")
 
     _external_syms = set()
     for name, symbol in Symbol._map.items():
@@ -312,7 +325,7 @@ def generate_callgraph():
         for symbol in _external_syms:
             _external_obj.symbols[symbol.name] = symbol
 
-    generate_archive_clusters()
+    generate_archive_clusters(outfile)
 
     for name, symbol in Symbol._map.items():
         if not symbol.is_used():
@@ -320,12 +333,13 @@ def generate_callgraph():
         if symbol._type in type_function:
             for dep in symbol.deps:
                 if not dep.name in ignored:
-                    print("\"%s\" -> \"%s\"" % (symbol.name, dep.name))
-    print("}")
+                    outfile.write("\"%s\" -> \"%s\"\n" % (symbol.name, dep.name))
+    outfile.write("}\n")
 
 def calculate_stack_usage():
     tmp = []
     for name, symbol in Symbol._map.items():
+        #print("symbol {} {}".format(name,symbol))
         if not symbol.is_used():
             continue
         if symbol._type in type_function:
@@ -363,6 +377,7 @@ if __name__ == "__main__":
     parser.add_argument("--root", help="root for object files", default=".")
     parser.add_argument("--elf", help="elf file")
     parser.add_argument("--nm", "-n", help="set name of nm tool")
+    parser.add_argument("--out-file", "-o", help="output file")
     args=parser.parse_args()
 
     if args.nm:
@@ -374,6 +389,12 @@ if __name__ == "__main__":
     parse_rtl_files()
     parse_stackusage_files()
 
-    generate_callgraph()
+    if args.out_file:
+        outfile = open(args.out_file, "w")
+    else:
+        outfile = open("output.dot", "w")
+
+    generate_callgraph(outfile)
+    outfile.close()
     #calculate_stack_usage()
     #total_sizes()
