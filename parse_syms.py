@@ -84,6 +84,9 @@ class Symbol(object):
 
         Symbol._map[s._global_name] = s
 
+    def __repr__(s):
+        return s.name
+
     def is_used(s):
         try:
             if s._type == 'W':
@@ -216,7 +219,6 @@ def parse_rtl(fname, obj):
         m = re_rtl_func.match(line)
         if m:
             name = m.group(1)
-            dprint("function match: %s" %name)
             function = Symbol._map[Symbol.get_global_name(name, obj)]
             continue
 
@@ -226,7 +228,6 @@ def parse_rtl(fname, obj):
         m = re_rtl_func_call.match(line) or re_rtl_symbol_ref.match(line)
         if m:
             ref = m.group(1)
-            dprint("ref match: %s" %name)
             ref_sym = Symbol._map.get(Symbol.get_global_name(ref, obj))
             if not ref_sym:
                 ref_sym = Symbol.unmangled_map.get(ref)
@@ -259,11 +260,13 @@ def parse_stack_usage(fname, obj):
 
         tmp, nbytes, static = line.split("\t")
         source, line, pos, func = tmp.split(":")
-        #dprint(obj.name, source, func, nbytes)
+        if func == 'name':
+            dprint(obj.name, source, func, nbytes)
         sym = Symbol.get(func, obj)
         if not sym:
             continue
 
+        #dprint("add stack usage for %s: %d" %(sym, int(nbytes)))
         sym.stack_usage = int(nbytes)
 
 def parse_stackusage_files():
@@ -298,7 +301,12 @@ def generate_archive_clusters(outfile):
                 if symbol.is_used():
                     if not symbol._type in { 'W' }:
                         attrs = {}
-                        attrs["label"] = "\\N\\ntype: %s size: %s" % (symbol._type, symbol.size)
+                        if symbol.stack_usage > 0:
+                            attrs["label"] = "\\N\\ntype: %s size: %s stack: %s" \
+                                    % (symbol._type, symbol.size, symbol.stack_usage)
+                        else:
+                            attrs["label"] = "\\N\\ntype: %s size: %s" \
+                                    % (symbol._type, symbol.size)
                         if symbol._type in type_memory:
                             attrs["peripheries"] = "2"
                         if symbol._type in type_flash:
@@ -384,6 +392,8 @@ if __name__ == "__main__":
         NM=args.nm
 
     objects = glob.glob('{}/**/*.{}'.format(args.root, args.object_extension), recursive=True)
+    print(objects)
+    #sys.exit()
     parse_syms(objects)
     parse_elfsyms(args.elf)
     parse_rtl_files()
