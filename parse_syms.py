@@ -392,8 +392,6 @@ if __name__ == "__main__":
         NM=args.nm
 
     objects = glob.glob('{}/**/*.{}'.format(args.root, args.object_extension), recursive=True)
-    print(objects)
-    #sys.exit()
     parse_syms(objects)
     parse_elfsyms(args.elf)
     parse_rtl_files()
@@ -406,5 +404,5 @@ if __name__ == "__main__":
 
     generate_callgraph(outfile)
     outfile.close()
-    #calculate_stack_usage()
-    #total_sizes()
+    calculate_stack_usage()
+    total_sizes()
